@@ -9,10 +9,17 @@
 #include <regex>
 using namespace std;
 
+#ifdef _DEBUG
 #include "capstone/capstone.h"
-#pragma comment(lib, "capstone_dll.lib")
 #include "keystone/keystone.h"
-#pragma comment(lib, "keystone.lib")
+#pragma comment(lib, "capstone/DEBUG/capstone_dll.lib")
+#pragma comment(lib, "keystone/DEBUG/keystone.lib")
+#else
+#include "capstone/capstone.h"
+#include "keystone/keystone.h"
+#pragma comment(lib, "capstone/RELEASE/capstone.lib")
+#pragma comment(lib, "keystone/RELEASE/keystone.lib")
+#endif
 
 #pragma warning(disable:4996)
 
@@ -105,7 +112,7 @@ void patchIatImport(BYTE* dumpImg, map<DWORD, string> callViaThunkArr) {
 	}
 }
 
-int main(void)
+int main(int argc, char** argv)
 {
 	puts
 	(
@@ -116,29 +123,44 @@ int main(void)
 		"88        88.  ...  .d88b.  88.  .88 \n"
 		"88888888P `88888P' dP'  `dP `88888P8 \n"
 		"ooooooooooooooooooooooooooooooooooooo\n"
-		"Lexa [v1.0] by aaaddress1@chroot.org\n"
+		"Simple Application Loader & Anti-Tampering\n"
+		"Lexa [v1.1] by aaaddress1@chroot.org\n"
 		" --- \n"
 	);
+	bool enableAntiTable = false; int step = 1;
+	if (argc == 1) {
+		printf("usage: %s [PE File To Run] [optional: /AT or /AntiTamper]", strrchr(argv[0], '\\') ? strrchr(argv[0], '\\')  + 1: argv[0]);
+		return 1;
+	}
+	for (size_t i = 0; i < argc && !enableAntiTable; i++)
+		enableAntiTable = !stricmp(argv[i], "/AT") || !stricmp(argv[i], "/AntiTamper");
+
+	 printf("[+] Anti-Tampering: %s\n", enableAntiTable ? "[TRUE]": "[FALSE]");
+
 	// --- read target raw binary ---
 	char* fileData; DWORD fileSize;
-	readBinFile("msgbox.exe", &fileData, fileSize);
-
+	readBinFile(argv[1], &fileData, fileSize);
+	if (fileSize == 0) {
+		printf("[!] PE file not found.\n");
+		return 1;
+	}
 	// --- dump as mapped image ---
 	BYTE* dumpImg; size_t imgSize;
-	puts("[1]: File Mapping");
+	printf("[%i]: File Mapping\n", step++);
 	dumpMappedImgBin(fileData, dumpImg, &imgSize);
 
 	// --- parse iat fields ---
-	puts("[2]: Fetch Imported Fields");
+	printf("[%i]: Fetch Imported Fields\n", step++);
 	PIMAGE_NT_HEADERS ntHdr = getNtHdr(dumpImg);
 	map<DWORD, string> callViaThunkArr = getIAT_callVia((size_t)dumpImg);
 	for (map<DWORD, string>::iterator iterator = callViaThunkArr.begin(); iterator != callViaThunkArr.end(); iterator++) {
 		IMAGE_THUNK_DATA* fieldThunk = (IMAGE_THUNK_DATA*)(dumpImg + iterator->first);
 		PIMAGE_IMPORT_BY_NAME currApiName = (PIMAGE_IMPORT_BY_NAME)(dumpImg + fieldThunk->u1.ForwarderString);
+		if (false == enableAntiTable) fieldThunk->u1.Function = (size_t)(GetProcAddress(LoadLibraryA(iterator->second.c_str()), currApiName->Name));
 		printf("    # +%4x -> %s : %s\n", iterator->first, iterator->second.c_str(), &currApiName->Name);
 	}
 	// --- do relocation ---
-	puts("[3]: Deal with Relocation");
+	printf("[%i]: Deal with Relocation\n", step++);
 	applyReloc((size_t)dumpImg, ntHdr->OptionalHeader.ImageBase, ntHdr->OptionalHeader.SizeOfImage);
 	
 	// ---
@@ -149,12 +171,14 @@ int main(void)
 	*/
 
 	// --- 
-	puts("[4]: Patching for Importing IAT Fields");
+	
 	ntHdr->OptionalHeader.ImageBase = (size_t)dumpImg;
-	patchIatImport(dumpImg, callViaThunkArr);
-
+	if (enableAntiTable) {
+		printf("[%i]: Patching for Importing IAT Fields\n", step++);
+		patchIatImport(dumpImg, callViaThunkArr);
+	}
 	// --- invoke entry ---
-	printf("[5]: file mapping @ %p, entry = %p\n", dumpImg, dumpImg + ntHdr->OptionalHeader.AddressOfEntryPoint);
+	printf("[%i]: invoke PE module: file mapping @ %p, entry = %p\n", step++, dumpImg, dumpImg + ntHdr->OptionalHeader.AddressOfEntryPoint);
 	((void(*)())(dumpImg + ntHdr->OptionalHeader.AddressOfEntryPoint))();
 	
 	return 0;
